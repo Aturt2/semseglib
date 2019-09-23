@@ -1,6 +1,9 @@
-from keras.layers import Input, Conv2D, MaxPooling2D, UpSampling2D, BatchNormalization, Concatenate, Dropout, Activation, Add, ZeroPadding1D
+from keras.layers import Input, Conv2D, MaxPooling2D, UpSampling2D, BatchNormalization, Concatenate, Dropout, \
+    Activation, Add
 from keras.models import Model
 from keras import backend as K
+from keras import initializers
+import numpy as np
 
 ######## Blocks
 def vanilla_block(X, f, level_number, direction, batchnorm=0):
@@ -61,12 +64,6 @@ def residual_concat_block(X, f, level_number, direction, batchnorm=0):
 
     return X
 
-def zeropad(X, ):
-    X_shape = X.shape.as_list()[-1]
-    shortcut_shape = shortcut.shape.as_list()[-1]
-    zeros = K.zeros_like(X)
-    zeros = zeros[:, :, :, :(X_shape - shortcut_shape)]
-
 def residual_zeropad_block(X, f, level_number, direction, batchnorm=0):
     suffix = "_" + direction + "_" + str(level_number)
     shortcut = X
@@ -83,18 +80,18 @@ def residual_zeropad_block(X, f, level_number, direction, batchnorm=0):
                name="conv" + suffix + "b")(X)
     X = Activation("relu", name="relu" + suffix + "b")(X)
 
-    print(X.shape.as_list()[-1], shortcut.shape.as_list()[-1])
-
-    X_shape = X.shape.as_list()[-1]
-    shortcut_shape = shortcut.shape.as_list()[-1]
-    if X_shape >= shortcut_shape:
-        zeros = K.zeros_like(X)
-        zeros = zeros[:, :, :, :(X_shape - shortcut_shape)]
-        shortcut = Concatenate(axis=3, name="merge_zeros" + suffix)([zeros, shortcut])
+    X_channels = X.shape.as_list()[-1]
+    shortcut_channels = shortcut.shape.as_list()[-1]
+    if X_channels >= shortcut_channels:
+        identity_weights = np.eye(shortcut_channels, X_channels, dtype=np.float32)
+        shortcut = Conv2D(X_channels, kernel_size=1, strides=1, use_bias=False, trainable=False,
+                          kernel_initializer=initializers.Constant(value=identity_weights),
+                          name="zeropad" + suffix)(shortcut)
     else:
-        zeros = K.zeros_like(shortcut)
-        zeros = zeros[:, :, :, :(shortcut_shape - X_shape)]
-        X = Concatenate(axis=3, name="merge_zeros" + suffix)([zeros, X])
+        identity_weights = np.eye(X_channels, shortcut_channels, dtype=np.float32)
+        X = Conv2D(shortcut_channels, kernel_size=1, strides=1, use_bias=False, trainable=False,
+                   kernel_initializer=initializers.Constant(value=identity_weights),
+                   name="zeropad" + suffix)(X)
     X = Add(name="add" + suffix)([X, shortcut])
 
     return X
