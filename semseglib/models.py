@@ -1,8 +1,8 @@
 from keras.layers import Input, Conv2D, MaxPooling2D, UpSampling2D, BatchNormalization, Concatenate, Dropout, \
-    Activation, Add
+    Activation, Add, Lambda
 from keras.models import Model
-from keras import backend as K
 from keras import initializers
+import keras
 import numpy as np
 
 ######## Blocks
@@ -97,7 +97,7 @@ def residual_zeropad_block(X, f, level_number, direction, batchnorm=0):
     return X
 
 ######## U-Net
-def unet(input_shape, levels, f1, block_type="vanilla", batchnorm=False):
+def unet(input_shape, levels, f1, block_type="vanilla", batchnorm=False, downsampling="maxpool", classes=1):
     inputs = Input(input_shape)
     block_dict = {
         "vanilla": vanilla_block,
@@ -110,11 +110,19 @@ def unet(input_shape, levels, f1, block_type="vanilla", batchnorm=False):
     # ENCODER
     X = block_dict[block_type](inputs, f1, 1, "down", batchnorm * 1)
     copy.append(X)
-    X = MaxPooling2D((2,2), name="pool_1")(X)
+    if downsampling == "maxpool":
+        X = MaxPooling2D((2,2), name="pool_1")(X)
+    elif downsampling.startswith("conv"):
+        X = Conv2D(f1, kernel_size=int(downsampling[4]), strides=2, padding="same",
+                   kernel_initializer="he_normal", name="pool_1")(X)
     for level_number in range(2, levels):
         X = block_dict[block_type](X, f1 * 2**(level_number-1), level_number, "down", batchnorm * 2)
         copy.append(X)
-        X = MaxPooling2D((2,2), name="pool_" + str(level_number))(X)
+        if downsampling == "maxpool":
+            X = MaxPooling2D((2,2), name="pool_" + str(level_number))(X)
+        elif downsampling.startswith("conv"):
+            X = Conv2D(f1 * 2**(level_number-1), kernel_size=int(downsampling[4]), strides=2, padding="same",
+                       kernel_initializer="he_normal", name="pool_" + str(level_number))(X)
 
     # BRIDGE
     X = block_dict[block_type](X, f1 * 2**(levels-1), levels, "bridge", batchnorm * 2)
@@ -125,8 +133,12 @@ def unet(input_shape, levels, f1, block_type="vanilla", batchnorm=False):
         X = Concatenate(axis=3, name="merge_" + str(level_number))([X, copy[level_number-1]])
         X = block_dict[block_type](X, f1 * 2**(level_number-1), level_number, "up", batchnorm * 2)
 
-    X = Conv2D(1, 1, name="conv_out")(X)
-    outputs = Activation("sigmoid", name="sigmoid")(X)
+    X = Conv2D(classes+1, 1, name="conv_out")(X)
+
+    if classes == 1:
+        outputs = Activation("sigmoid", name="sigmoid")(X)
+    else:
+        outputs = Lambda(lambda x: keras.activations.softmax(x, axis=-1))(X)
 
     model = Model(inputs, outputs)
     return model
