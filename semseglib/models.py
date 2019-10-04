@@ -6,7 +6,8 @@ import keras
 import numpy as np
 
 ######## Blocks
-def vanilla_block(X, f, level_number, direction, batchnorm=0):
+### Vanilla
+def vanilla_block(X, f, level_number, direction, batchnorm=0, dilations=None):
     suffix = "_" + direction + "_" + str(level_number)
 
     if batchnorm == 2:
@@ -23,7 +24,8 @@ def vanilla_block(X, f, level_number, direction, batchnorm=0):
 
     return X
 
-def residual_conv_block(X, f, level_number, direction, batchnorm=0):
+### Residual
+def residual_conv_block(X, f, level_number, direction, batchnorm=0, dilations=None):
     suffix = "_" + direction + "_" + str(level_number)
     shortcut = X
 
@@ -44,7 +46,7 @@ def residual_conv_block(X, f, level_number, direction, batchnorm=0):
 
     return X
 
-def residual_concat_block(X, f, level_number, direction, batchnorm=0):
+def residual_concat_block(X, f, level_number, direction, batchnorm=0, dilations=None):
     suffix = "_" + direction + "_" + str(level_number)
     shortcut = X
 
@@ -64,7 +66,7 @@ def residual_concat_block(X, f, level_number, direction, batchnorm=0):
 
     return X
 
-def residual_zeropad_block(X, f, level_number, direction, batchnorm=0):
+def residual_zeropad_block(X, f, level_number, direction, batchnorm=0, dilations=None):
     suffix = "_" + direction + "_" + str(level_number)
     shortcut = X
 
@@ -96,19 +98,53 @@ def residual_zeropad_block(X, f, level_number, direction, batchnorm=0):
 
     return X
 
+### Atrous
+def atrous_single_cell(X, f, level_number, direction, batchnorm=0, d=5):
+    suffix = "_" + direction + "_" + str(level_number) + "_d" + str(d)
+
+    if batchnorm == 2:
+        X = BatchNormalization(name="batchnorm" + suffix + "a")(X)
+    X = Conv2D(f, 3, padding="same", kernel_initializer="he_normal", dilation_rate=(3, 3),
+               name="conv" + suffix + "a")(X)
+    X = Activation("relu", name="relu" + suffix + "a")(X)
+
+    if batchnorm:
+        X = BatchNormalization(name="batchnorm" + suffix + "b")(X)
+    X = Conv2D(f, 3, padding="same", kernel_initializer="he_normal", dilation_rate=(3, 3),
+               name="conv" + suffix + "b")(X)
+    X = Activation("relu", name="relu" + suffix + "b")(X)
+
+    return X
+
+def atrous_block(X, f, level_number, direction, batchnorm=0, dilations=(1,3,15,31)):
+    cell_outputs = []
+    suffix = "_" + direction + "_" + str(level_number)
+
+    # Atrous convolutions
+    for d in dilations:
+        cell_outputs.append(atrous_single_cell(X, f, level_number, direction, batchnorm, d))
+
+    # Shortcut
+    cell_outputs.append(Conv2D(f, 1, kernel_initializer="he_normal", name="conv" + suffix + "_short")(X))
+    X = Add(name="add" + suffix)(cell_outputs)
+
+    return X
+
 ######## U-Net
-def unet(input_shape, levels, f1, block_type="vanilla", batchnorm=False, downsampling="maxpool", classes=1):
+def unet(input_shape, levels, f1, block_type="vanilla", batchnorm=False, downsampling="maxpool", classes=1,
+         dilations=None):
     inputs = Input(input_shape)
     block_dict = {
         "vanilla": vanilla_block,
         "residual_conv": residual_conv_block,
         "residual_concat": residual_concat_block,
-        "residual_zeropad": residual_zeropad_block
+        "residual_zeropad": residual_zeropad_block,
+        "atrous": atrous_block
     }
     copy = []
 
     # ENCODER
-    X = block_dict[block_type](inputs, f1, 1, "down", batchnorm * 1)
+    X = block_dict[block_type](inputs, f1, 1, "down", batchnorm * 1, dilations)
     copy.append(X)
     if downsampling == "maxpool":
         X = MaxPooling2D((2,2), name="pool_1")(X)
@@ -116,7 +152,7 @@ def unet(input_shape, levels, f1, block_type="vanilla", batchnorm=False, downsam
         X = Conv2D(f1, kernel_size=int(downsampling[4]), strides=2, padding="same",
                    kernel_initializer="he_normal", name="pool_1")(X)
     for level_number in range(2, levels):
-        X = block_dict[block_type](X, f1 * 2**(level_number-1), level_number, "down", batchnorm * 2)
+        X = block_dict[block_type](X, f1 * 2**(level_number-1), level_number, "down", batchnorm * 2, dilations)
         copy.append(X)
         if downsampling == "maxpool":
             X = MaxPooling2D((2,2), name="pool_" + str(level_number))(X)
@@ -125,13 +161,13 @@ def unet(input_shape, levels, f1, block_type="vanilla", batchnorm=False, downsam
                        kernel_initializer="he_normal", name="pool_" + str(level_number))(X)
 
     # BRIDGE
-    X = block_dict[block_type](X, f1 * 2**(levels-1), levels, "bridge", batchnorm * 2)
+    X = block_dict[block_type](X, f1 * 2**(levels-1), levels, "bridge", batchnorm * 2, dilations)
 
     # DECODER
     for level_number in reversed(range(1, levels)):
         X = UpSampling2D((2,2), name="up_" + str(level_number))(X)
         X = Concatenate(axis=3, name="merge_" + str(level_number))([X, copy[level_number-1]])
-        X = block_dict[block_type](X, f1 * 2**(level_number-1), level_number, "up", batchnorm * 2)
+        X = block_dict[block_type](X, f1 * 2**(level_number-1), level_number, "up", batchnorm * 2, dilations)
 
     X = Conv2D(classes+1, 1, name="conv_out")(X)
 
