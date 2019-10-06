@@ -104,19 +104,19 @@ def atrous_single_cell(X, f, level_number, direction, batchnorm=0, d=5):
 
     if batchnorm == 2:
         X = BatchNormalization(name="batchnorm" + suffix + "a")(X)
-    X = Conv2D(f, 3, padding="same", kernel_initializer="he_normal", dilation_rate=(3, 3),
+    X = Conv2D(f, 3, padding="same", kernel_initializer="one", dilation_rate=(3, 3),
                name="conv" + suffix + "a")(X)
     X = Activation("relu", name="relu" + suffix + "a")(X)
 
     if batchnorm:
         X = BatchNormalization(name="batchnorm" + suffix + "b")(X)
-    X = Conv2D(f, 3, padding="same", kernel_initializer="he_normal", dilation_rate=(3, 3),
+    X = Conv2D(f, 3, padding="same", kernel_initializer="one", dilation_rate=(3, 3),
                name="conv" + suffix + "b")(X)
     X = Activation("relu", name="relu" + suffix + "b")(X)
 
     return X
 
-def atrous_block(X, f, level_number, direction, batchnorm=0, dilations=(1,3,15,31)):
+def atrous_block(X, f, level_number, direction, batchnorm=0, dilations=(1,)):
     cell_outputs = []
     suffix = "_" + direction + "_" + str(level_number)
 
@@ -132,7 +132,7 @@ def atrous_block(X, f, level_number, direction, batchnorm=0, dilations=(1,3,15,3
 
 ######## U-Net
 def unet(input_shape, levels, f1, block_type="vanilla", batchnorm=False, downsampling="maxpool", classes=1,
-         dilations=None):
+         dilation_scheme=None):
     inputs = Input(input_shape)
     block_dict = {
         "vanilla": vanilla_block,
@@ -142,9 +142,11 @@ def unet(input_shape, levels, f1, block_type="vanilla", batchnorm=False, downsam
         "atrous": atrous_block
     }
     copy = []
+    if block_type != "atrous":
+        dilation_scheme = [[1] for _ in range(levels)]
 
     # ENCODER
-    X = block_dict[block_type](inputs, f1, 1, "down", batchnorm * 1, dilations)
+    X = block_dict[block_type](inputs, f1, 1, "down", batchnorm * 1, dilation_scheme[0])
     copy.append(X)
     if downsampling == "maxpool":
         X = MaxPooling2D((2,2), name="pool_1")(X)
@@ -152,7 +154,7 @@ def unet(input_shape, levels, f1, block_type="vanilla", batchnorm=False, downsam
         X = Conv2D(f1, kernel_size=int(downsampling[4]), strides=2, padding="same",
                    kernel_initializer="he_normal", name="pool_1")(X)
     for level_number in range(2, levels):
-        X = block_dict[block_type](X, f1 * 2**(level_number-1), level_number, "down", batchnorm * 2, dilations)
+        X = block_dict[block_type](X, f1 * 2**(level_number-1), level_number, "down", batchnorm * 2, dilation_scheme[level_number-1])
         copy.append(X)
         if downsampling == "maxpool":
             X = MaxPooling2D((2,2), name="pool_" + str(level_number))(X)
@@ -161,13 +163,13 @@ def unet(input_shape, levels, f1, block_type="vanilla", batchnorm=False, downsam
                        kernel_initializer="he_normal", name="pool_" + str(level_number))(X)
 
     # BRIDGE
-    X = block_dict[block_type](X, f1 * 2**(levels-1), levels, "bridge", batchnorm * 2, dilations)
+    X = block_dict[block_type](X, f1 * 2**(levels-1), levels, "bridge", batchnorm * 2, dilation_scheme[levels-1])
 
     # DECODER
     for level_number in reversed(range(1, levels)):
         X = UpSampling2D((2,2), name="up_" + str(level_number))(X)
         X = Concatenate(axis=3, name="merge_" + str(level_number))([X, copy[level_number-1]])
-        X = block_dict[block_type](X, f1 * 2**(level_number-1), level_number, "up", batchnorm * 2, dilations)
+        X = block_dict[block_type](X, f1 * 2**(level_number-1), level_number, "up", batchnorm * 2, dilation_scheme[level_number-1])
 
     X = Conv2D(classes+1, 1, name="conv_out")(X)
 

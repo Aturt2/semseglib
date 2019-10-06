@@ -19,11 +19,11 @@ def generalized_dice_coeff(y_true, y_pred):
     w = 1/(w**2+0.000001)
     # Compute gen dice coef:
     numerator = y_true*y_pred
-    numerator = w*K.sum(numerator,(0,1,2,3))
+    numerator = w*K.sum(numerator,(0,1,2))
     numerator = K.sum(numerator)
 
     denominator = y_true+y_pred
-    denominator = w*K.sum(denominator,(0,1,2,3))
+    denominator = w*K.sum(denominator,(0,1,2))
     denominator = K.sum(denominator)
 
     gen_dice_coef = 2*numerator/denominator
