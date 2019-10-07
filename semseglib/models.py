@@ -116,7 +116,7 @@ def atrous_single_cell(X, f, level_number, direction, batchnorm=0, d=5):
 
     return X
 
-def atrous_block(X, f, level_number, direction, batchnorm=0, dilations=(1,)):
+def atrous_block_residual_conv1x1(X, f, level_number, direction, batchnorm=0, dilations=(1,)):
     cell_outputs = []
     suffix = "_" + direction + "_" + str(level_number)
 
@@ -130,6 +130,33 @@ def atrous_block(X, f, level_number, direction, batchnorm=0, dilations=(1,)):
 
     return X
 
+def atrous_block_residual_zeropad(X, f, level_number, direction, batchnorm=0, dilations=(1,)):
+    cell_outputs = []
+    suffix = "_" + direction + "_" + str(level_number)
+
+    # Atrous convolutions
+    for d in dilations:
+        cell_outputs.append(atrous_single_cell(X, f, level_number, direction, batchnorm, d))
+
+    # Shortcut
+    shortcut_channels = X.shape.as_list()[-1]
+    if f >= shortcut_channels:
+        identity_weights = np.eye(shortcut_channels, f, dtype=np.float32)
+        X = Conv2D(f, kernel_size=1, strides=1, use_bias=False, trainable=False,
+                          kernel_initializer=initializers.Constant(value=identity_weights),
+                          name="zeropad" + suffix)(X)
+    else:
+        identity_weights = np.eye(f, shortcut_channels, dtype=np.float32)
+        for i in range(len(cell_outputs)):
+            cell_outputs[i] = Conv2D(shortcut_channels, kernel_size=1, strides=1, use_bias=False, trainable=False,
+                                     kernel_initializer=initializers.Constant(value=identity_weights),
+                                     name="zeropad" + suffix + "_" + str(i))(cell_outputs[i])
+
+    cell_outputs.append(X)
+    X = Add(name="add" + suffix)(cell_outputs)
+
+    return X
+
 ######## U-Net
 def unet(input_shape, levels, f1, block_type="vanilla", batchnorm=False, downsampling="maxpool", classes=1,
          dilation_scheme=None):
@@ -139,10 +166,11 @@ def unet(input_shape, levels, f1, block_type="vanilla", batchnorm=False, downsam
         "residual_conv": residual_conv_block,
         "residual_concat": residual_concat_block,
         "residual_zeropad": residual_zeropad_block,
-        "atrous": atrous_block
+        "atrous_residual_conv1x1": atrous_block_residual_conv1x1,
+        "atrous_residual_zeropad": atrous_block_residual_zeropad
     }
     copy = []
-    if block_type != "atrous":
+    if not(block_type.startswith("atrous")):
         dilation_scheme = [[1] for _ in range(levels)]
 
     # ENCODER
